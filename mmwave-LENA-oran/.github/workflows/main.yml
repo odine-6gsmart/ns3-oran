@@ -1,0 +1,38 @@
+name: CI
+
+# Controls when the action will run. Triggers the workflow on push or pull request
+# events but only for the master branch
+on:
+  push:
+    branches: [ new-handover ]
+  pull_request:
+    branches: [ new-handover ]
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  build-and-run:
+    # This workflow contains a single job called "build"
+    name: build and test gcc ${{ matrix.gcc-version }}
+      # Test multiple versions of the GCC compiler
+    strategy:
+      matrix:
+        gcc-version: [10, 11, 12, 13]
+
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+    # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    - uses: actions/checkout@v4
+
+    # Install GCC
+    - name: Set up GCC
+      uses: egor-tensin/setup-gcc@v1
+      with:
+        version: ${{ matrix.gcc-version }}
+        platform: x64
+
+    # Build and run the tests, enable only the mmwave and internet-apps (dependency) modules to speedup the test
+    - name: Build and run the tests
+      run: ./ns3 configure --enable-examples --enable-tests --build-profile=optimized --enable-modules=mmwave,internet-apps && ./ns3 build && ./test.py

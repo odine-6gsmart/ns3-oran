@@ -1,0 +1,345 @@
+================================================================================
+                    ENERGY SAVING WITH CELL UTILIZATION SCENARIO
+                            LOGGING SUMMARY REPORT
+================================================================================
+
+GENERATED ON: $(date)
+SCENARIO: Energy_saving_with_cell_utilization_scenario.cc
+TOTAL LOGGED FILES: 48+ text files
+
+================================================================================
+1. E2 KPM METRICS (O-RAN E2 Key Performance Indicators)
+================================================================================
+
+1.1 CU-CP (Central Unit - Control Plane) Metrics
+------------------------------------------------
+Files: cu-cp-cell-1.txt, cu-cp-cell-2.txt, cu-cp-cell-3.txt, cu-cp-cell-4.txt, cu-cp-cell-5.txt
+Period: 100ms (indicationPeriodicity = 0.1s)
+Purpose: Control plane metrics for handover decisions and cell management
+
+Columns:
+- timestamp: Time in milliseconds since simulation start
+- ueImsiComplete: UE IMSI identifier (e.g., 00001, 00002)
+- numActiveUes: Number of active UEs in the cell
+- DRB.EstabSucc.5QI.UEID (numDrb): Number of established DRBs per UE
+- DRB.RelActNbr.5QI.UEID (0): Number of released DRBs (usually 0)
+- L3 serving Id(m_cellId): Serving cell ID
+- UE (imsi): UE IMSI number
+- L3 serving SINR: Serving cell SINR value
+- L3 serving SINR 3gpp: 3GPP standardized SINR value
+- L3 neigh Id 1-8 (cellId): Neighbor cell IDs (up to 8 neighbors)
+- L3 neigh SINR 1-8: Neighbor cell SINR values
+- L3 neigh SINR 3gpp 1-8: 3GPP standardized neighbor SINR values
+
+1.2 CU-UP (Central Unit - User Plane) Metrics
+---------------------------------------------
+Files: cu-up-cell-1.txt, cu-up-cell-2.txt, cu-up-cell-3.txt, cu-up-cell-4.txt, cu-up-cell-5.txt
+Period: 100ms (indicationPeriodicity = 0.1s)
+Purpose: User plane metrics for throughput and QoS monitoring
+
+Columns:
+- timestamp: Time in milliseconds since simulation start
+- ueImsiComplete: UE IMSI identifier
+- DRB.PdcpSduDelayDl (cellAverageLatency): Average PDCP delay for cell
+- m_pDCPBytesUL (0): UL PDCP bytes (intentionally 0)
+- m_pDCPBytesDL (cellDlTxVolume): Total DL PDCP bytes for cell
+- DRB.PdcpSduVolumeDl_Filter.UEID (txBytes): DL PDCP bytes per UE
+- Tot.PdcpSduNbrDl.UEID (txDlPackets): DL PDCP packet count per UE
+- DRB.PdcpSduBitRateDl.UEID(pdcpThroughput): DL PDCP throughput per UE
+- DRB.PdcpSduDelayDl.UEID (pdcpLatency): DL PDCP delay per UE
+- QosFlow.PdcpPduVolumeDL_Filter.UEID(txPdcpPduBytesNrRlc): RLC PDCP PDU bytes per UE
+- DRB.PdcpPduNbrDl.Qos.UEID (txPdcpPduNrRlc): RLC PDCP PDU count per UE
+
+1.3 DU (Distributed Unit) Metrics
+---------------------------------
+Files: du-cell-1.txt, du-cell-2.txt, du-cell-3.txt, du-cell-4.txt, du-cell-5.txt
+Period: 100ms (indicationPeriodicity = 0.1s)
+Purpose: Physical layer metrics and resource utilization
+
+Columns:
+- timestamp: Time in milliseconds since simulation start
+- ueImsiComplete: UE IMSI identifier
+- plmId: Public Land Mobile Network ID
+- nrCellId: NR Cell ID
+- dlAvailablePrbs: Available DL Physical Resource Blocks
+- ulAvailablePrbs: Available UL Physical Resource Blocks
+- qci: QoS Class Identifier
+- dlPrbUsage: DL PRB usage percentage
+- ulPrbUsage: UL PRB usage percentage
+- TB.TotNbrDl.1: Total DL Transport Blocks
+- TB.TotNbrDlInitial: Total initial DL Transport Blocks
+- TB.TotNbrDlInitial.Qpsk: QPSK modulated initial DL TBs
+- TB.TotNbrDlInitial.16Qam: 16QAM modulated initial DL TBs
+- TB.TotNbrDlInitial.64Qam: 64QAM modulated initial DL TBs
+- RRU.PrbUsedDl: DL PRBs used by RRU
+- TB.ErrTotalNbrDl.1: Total DL Transport Block errors
+- QosFlow.PdcpPduVolumeDL_Filter: Filtered DL PDCP PDU volume
+- CARR.PDSCHMCSDist.Bin1-6: PDSCH MCS distribution bins
+- L1M.RS-SINR.Bin34: SINR distribution bin 34 (SINR = (34-64)*0.5 = -15 dB)
+- L1M.RS-SINR.Bin46: SINR distribution bin 46 (SINR = (46-64)*0.5 = -9 dB)
+- L1M.RS-SINR.Bin58: SINR distribution bin 58 (SINR = (58-64)*0.5 = -3 dB)
+- L1M.RS-SINR.Bin70: SINR distribution bin 70 (SINR = (70-64)*0.5 = 3 dB)
+- L1M.RS-SINR.Bin82: SINR distribution bin 82 (SINR = (82-64)*0.5 = 9 dB)
+- L1M.RS-SINR.Bin94: SINR distribution bin 94 (SINR = (94-64)*0.5 = 15 dB)
+- L1M.RS-SINR.Bin127: SINR distribution bin 127 (SINR = (127-64)*0.5 = 31.5 dB)
+- DRB.BufferSize.Qos: QoS buffer size
+- DRB.MeanActiveUeDl: Mean active UEs in DL
+- TB.TotNbrDl.1.UEID: Per-UE total DL Transport Blocks
+- TB.TotNbrDlInitial.UEID: Per-UE initial DL Transport Blocks
+- TB.TotNbrDlInitial.Qpsk.UEID: Per-UE QPSK initial DL TBs
+- TB.TotNbrDlInitial.16Qam.UEID: Per-UE 16QAM initial DL TBs
+- TB.TotNbrDlInitial.64Qam.UEID: Per-UE 64QAM initial DL TBs
+- TB.ErrTotalNbrDl.1.UEID: Per-UE DL Transport Block errors
+- QosFlow.PdcpPduVolumeDL_Filter.UEID: Per-UE filtered DL PDCP PDU volume
+- RRU.PrbUsedDl.UEID: Per-UE DL PRBs used
+- CARR.PDSCHMCSDist.Bin1-6.UEID: Per-UE PDSCH MCS distribution bins
+- L1M.RS-SINR.Bin34-127.UEID: Per-UE SINR distribution bins
+- DRB.BufferSize.Qos.UEID: Per-UE QoS buffer size
+- DRB.UEThpDl.UEID: Per-UE DL throughput
+- DRB.UEThpDlPdcpBased.UEID: Per-UE PDCP-based DL throughput
+
+================================================================================
+2. E2 PDCP & RLC STATISTICS (Bearer-Level Metrics)
+================================================================================
+
+2.1 E2 PDCP Statistics (mmWave)
+-------------------------------
+Files: DlE2PdcpStats.txt, UlE2PdcpStats.txt
+Period: 1.0 second (configurable to 100ms)
+Purpose: PDCP layer statistics for bearer management
+
+Columns:
+- start: Epoch start time (seconds)
+- end: Epoch end time (seconds)
+- CellId: Cell identifier
+- IMSI: UE identifier
+- RNTI: Radio Network Temporary Identifier
+- LCID: Logical Channel ID (3 for data)
+- nTxPDUs: Number of transmitted PDUs
+- TxBytes: Transmitted bytes
+- nRxPDUs: Number of received PDUs
+- RxBytes: Received bytes
+- delay: Average delay (seconds)
+- stdDev: Delay standard deviation (seconds)
+- min: Minimum delay (seconds)
+- max: Maximum delay (seconds)
+- PduSize: Average PDU size (bytes)
+- stdDev: PDU size standard deviation (bytes)
+- min: Minimum PDU size (bytes)
+- max: Maximum PDU size (bytes)
+
+2.2 E2 PDCP Statistics (LTE)
+----------------------------
+Files: DlE2PdcpStatsLte.txt, UlE2PdcpStatsLte.txt
+Period: 1.0 second (configurable to 100ms)
+Purpose: LTE PDCP layer statistics
+
+Columns: Same as mmWave E2 PDCP statistics
+
+2.3 E2 RLC Statistics (mmWave)
+------------------------------
+Files: DlE2RlcStats.txt, UlE2RlcStats.txt
+Period: 1.0 second (configurable to 100ms)
+Purpose: RLC layer statistics
+
+Columns: Same format as E2 PDCP statistics
+
+2.4 E2 RLC Statistics (LTE)
+---------------------------
+Files: DlE2RlcStatsLte.txt, UlE2RlcStatsLte.txt
+Period: 1.0 second (configurable to 100ms)
+Purpose: LTE RLC layer statistics
+
+Columns: Same format as E2 PDCP statistics
+
+================================================================================
+3. PHYSICAL LAYER (PHY) STATISTICS
+================================================================================
+
+3.1 DL PHY Transmission Statistics
+----------------------------------
+Files: DlTxPhyStats.txt, DlPhyTransmissionTrace.txt
+Period: Per transmission event (very high frequency)
+Purpose: Physical layer transmission details
+
+Columns:
+- time: Simulation time (seconds)
+- cellId: Cell identifier
+- IMSI: UE identifier
+- RNTI: Radio Network Temporary Identifier
+- layer: Transmission layer
+- mcs: Modulation and Coding Scheme
+- size: Transport block size
+- rv: Redundancy version
+- ndi: New data indicator
+- ccId: Component carrier ID
+
+3.2 LTE UL SINR Statistics
+--------------------------
+Files: LteUlSinrStats.txt
+Period: 1 subframe (1ms) - configurable via RsrpSinrSamplePeriod
+Purpose: LTE uplink SINR measurements
+
+Columns:
+- time: Simulation time (seconds)
+- cellId: Cell identifier
+- IMSI: UE identifier
+- RNTI: Radio Network Temporary Identifier
+- sinrLinear: SINR value in linear scale
+- componentCarrierId: Component carrier identifier
+
+3.3 mmWave SINR Statistics
+--------------------------
+Files: MmWaveSinrTime.txt
+Period: 25.6ms (configurable via UpdateUeSinrEstimatePeriod)
+Purpose: mmWave SINR measurements
+
+Columns:
+- time: Simulation time (seconds)
+- IMSI: UE identifier
+- cellId: Cell identifier
+- SINR: SINR value in dB
+
+================================================================================
+4. MEDIUM ACCESS CONTROL (MAC) STATISTICS
+================================================================================
+
+4.1 DL MAC Statistics
+---------------------
+Files: DlMacStats.txt
+Period: Per scheduling event (very high frequency)
+Purpose: MAC layer scheduling information
+
+Columns:
+- time: Simulation time (seconds)
+- cellId: Cell identifier
+- IMSI: UE identifier
+- frame: Frame number
+- sframe: Subframe number
+- RNTI: Radio Network Temporary Identifier
+- mcsTb1: MCS for transport block 1
+- sizeTb1: Size of transport block 1
+- mcsTb2: MCS for transport block 2
+- sizeTb2: Size of transport block 2
+- ccId: Component carrier identifier
+
+4.2 eNB Scheduling Allocation Traces
+------------------------------------
+Files: EnbSchedAllocTraces.txt
+Period: Per scheduling event (very high frequency)
+Purpose: Detailed scheduling allocation information
+
+================================================================================
+5. BEARER-LEVEL STATISTICS
+================================================================================
+
+5.1 PDCP Statistics
+-------------------
+Files: DlPdcpStats.txt, UlPdcpStats.txt
+Period: 1.0 second (default)
+Purpose: PDCP layer bearer statistics
+
+Columns: Similar to E2 PDCP statistics
+
+5.2 RLC Statistics
+------------------
+Files: DlRlcStats.txt, UlRlcStats.txt
+Period: 1.0 second (default)
+Purpose: RLC layer bearer statistics
+
+Columns: Similar to E2 RLC statistics
+
+================================================================================
+6. HANDOVER & MOBILITY STATISTICS
+================================================================================
+
+6.1 Cell ID Statistics
+----------------------
+Files: CellIdStats.txt, CellIdStatsHandover.txt
+Period: Per handover event
+Purpose: Cell association and handover tracking
+
+6.2 eNB Handover Statistics
+---------------------------
+Files: EnbHandoverStartStats.txt, EnbHandoverEndStats.txt
+Period: Per handover event
+Purpose: Handover start/end events
+
+6.3 UE Handover Statistics
+--------------------------
+Files: UeHandoverStartStats.txt, UeHandoverEndStats.txt
+Period: Per handover event
+Purpose: UE handover events
+
+================================================================================
+7. TOPOLOGY & POSITION FILES
+================================================================================
+
+7.1 Node Position Files
+-----------------------
+Files: enbs.txt, gnbs.txt, ues.txt
+Period: Configurable (default: multiple prints during simulation)
+Purpose: Node positions for visualization and analysis
+
+================================================================================
+CONFIGURATION NOTES
+================================================================================
+
+1. E2 KPM Metrics (cu-cp, cu-up, du files):
+   - Period: 100ms (indicationPeriodicity = 0.1s)
+   - Enable with: --e2andLogging=true
+
+2. E2 PDCP/RLC Statistics:
+   - Default Period: 1.0 second
+   - Configurable to 100ms with: Config::SetDefault("ns3::MmWaveBearerStatsCalculator::EpochDuration", TimeValue(Seconds(0.1)));
+
+3. SINR Statistics:
+   - LTE UL SINR: 1ms (RsrpSinrSamplePeriod = 1 subframe)
+   - mmWave SINR: 25.6ms (UpdateUeSinrEstimatePeriod = 25.6ms)
+
+4. PHY/MAC Statistics:
+   - Very high frequency (per transmission/scheduling event)
+   - Enable with: enableTraces=true
+
+================================================================================
+XAPP DEVELOPMENT RECOMMENDATIONS
+================================================================================
+
+1. For Real-time xApp Development (100ms decisions):
+   - Use E2 KPM metrics (cu-cp, cu-up, du files) - already 100ms
+   - Configure E2 PDCP/RLC stats to 100ms for bearer-level insights
+   - Use SINR files for radio condition monitoring
+
+2. For Network Optimization:
+   - Use DU metrics for resource utilization analysis
+   - Use CU-UP metrics for throughput and QoS monitoring
+   - Use CU-CP metrics for handover and cell management
+
+3. For Performance Analysis:
+   - Use PHY/MAC stats for detailed transmission analysis
+   - Use bearer-level stats for end-to-end performance
+   - Use handover stats for mobility analysis
+
+================================================================================
+FILE SIZES & FREQUENCY SUMMARY
+================================================================================
+
+High Frequency (Per Event):
+- DlPhyTransmissionTrace.txt: ~600KB+ (very high frequency)
+- EnbSchedAllocTraces.txt: ~800KB+ (very high frequency)
+- DlMacStats.txt: ~15KB+ (high frequency)
+- DlTxPhyStats.txt: ~13KB+ (high frequency)
+
+Medium Frequency (100ms):
+- cu-cp-cell-*.txt: ~1-6KB each (100ms)
+- cu-up-cell-*.txt: ~1-2KB each (100ms)
+- du-cell-*.txt: ~1-9KB each (100ms)
+
+Low Frequency (1 second):
+- DlE2PdcpStats.txt: ~5KB (1 second)
+- DlE2RlcStats.txt: ~6KB (1 second)
+- DlPdcpStats.txt: ~3KB (1 second)
+
+================================================================================
+END OF LOGGING SUMMARY
+================================================================================
