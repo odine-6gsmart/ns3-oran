@@ -92,8 +92,8 @@ uint16_t g_cellId1 = 0;               // Cell ID for first eNB (for mapping)
 uint16_t g_cellId2 = 0;               // Cell ID for second eNB (for mapping)
 
 // *** TTT and Freeze Timer Configuration ***
-const double HO_TTT = 0.080;          // Time-to-Trigger (seconds)
-const double HO_FREEZE = 0.200;       // Handover freeze timer (seconds)
+const double HO_TTT = 0.320;          // Time-to-Trigger (seconds)
+const double HO_FREEZE = 2.000;       // Handover freeze timer (seconds)
 std::map<uint32_t, double> g_lastHoTime;       // Last HO time per UE NodeId
 std::map<uint32_t, double> g_hoTriggerStart;   // TTT start time per UE NodeId
 

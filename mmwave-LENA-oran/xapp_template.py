@@ -17,7 +17,7 @@ os.makedirs(BUILD_DIR, exist_ok=True)
 NS3_CMD = [
     "../build/scratch/ns3.42-Differing_Power_Scenerio_HO-optimized",
     "--simTime=20.0",
-    "--N_Ues=20",
+    "--N_Ues=30",
     "--useHybrid=true",
     "--enableTiltTwoRay=true",
     "--reducedPmValues=true",
@@ -27,7 +27,7 @@ NS3_CMD = [
     "--exportUEPositions=true",
     "--enableRuntimeControl=true",
     "--ControlPollInterval=10",
-    "--RngRun=2001",
+    "--RngRun=155",
     "--TxPower1=38.0",
     "--TxPower2=38.0",
     "--Tilt=10.0"
@@ -44,10 +44,6 @@ def run_ns3():
 
 # --- Constants ---
 BS_POS = {1: [750.0, 1000.0], 2: [1250.0, 1000.0]}
-SINR_BIN_CENTERS = {
-    34: -5.0, 46: -1.0, 58: 3.0,
-    70: 7.0, 82: 11.0, 94: 15.0, 127: 20.0
-}
 
 # --- State & History Tracking ---
 # Dictionaries to remember file reading positions to avoid re-reading
@@ -151,6 +147,23 @@ def get_avg_metric(history_deque, current_time, lookback_window):
     valid_vals = [x['v'] for x in history_deque if current_time - lookback_window <= x['t'] <= current_time]
     return sum(valid_vals) / len(valid_vals) if valid_vals else None
 
+def get_avg_sinr(history_deque, current_time, lookback_window):
+    """Calculates true weighted average SINR over the lookback window using 3GPP formula."""
+    valid_counts = [x['counts'] for x in history_deque if current_time - lookback_window <= x['t'] <= current_time]
+    if not valid_counts: return None
+    
+    total_counts = {b: 0.0 for b in [34, 46, 58, 70, 82, 94, 127]}
+    for c in valid_counts:
+        for b, v in c.items():
+            if b in total_counts:
+                total_counts[b] += v
+            
+    tot = sum(total_counts.values())
+    if tot == 0: return None
+    
+    avg_sinr_db = sum(((b / 2.0) - 23.0) * val for b, val in total_counts.items()) / tot
+    return avg_sinr_db
+
 def write_commands(build_dir, commands):
     """Atomically writes commands to runtime_control.txt"""
     if not commands: return
@@ -186,8 +199,7 @@ def process_metrics(build_dir, sim_time):
                 }
                 tot = sum(counts.values())
                 if tot > 0:
-                    avg_sinr = sum(c * SINR_BIN_CENTERS[b] for b, c in counts.items()) / tot
-                    sinr_history[cid].append({'t': ts, 'v': avg_sinr})
+                    sinr_history[cid].append({'t': ts, 'counts': counts})
             except ValueError:
                 continue
 
@@ -266,7 +278,7 @@ def run_power_manager(sim_time, state):
         
     commands = []
     for cid in [1, 2]:
-        avg_sinr = get_avg_metric(sinr_history[cid], sim_time, LOOKBACK_WINDOW)
+        avg_sinr = get_avg_sinr(sinr_history[cid], sim_time, LOOKBACK_WINDOW)
         avg_tp = get_avg_metric(tp_history[cid], sim_time, LOOKBACK_WINDOW)
         
         if avg_sinr is None or avg_tp is None: continue
@@ -431,7 +443,7 @@ def xapp_loop():
                 if sim_time >= last_print_time + 1.0:
                     print(f"\n--- Metrics at Sim Time {sim_time:.1f}s ---")
                     for cid in [1, 2]:
-                        sinr = get_avg_metric(sinr_history[cid], sim_time, LOOKBACK_WINDOW) or 0.0
+                        sinr = get_avg_sinr(sinr_history[cid], sim_time, LOOKBACK_WINDOW) or 0.0
                         tp = get_avg_metric(tp_history[cid], sim_time, LOOKBACK_WINDOW) or 0.0
                         load = get_avg_metric(load_history[cid], sim_time, LOOKBACK_WINDOW) or 0.0
                         dist = get_avg_metric(dist_history[cid], sim_time, LOOKBACK_WINDOW) or 0.0
