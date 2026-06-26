@@ -81,26 +81,29 @@ static std::ofstream g_networkConfigFile;
 // RAM usage log (sampled every 100ms simulation time)
 static std::ofstream g_ramUsageFile;
 
+// *** 4-gNB Scenario Constants ***
+static const int N_ENB = 4;
+
 // *** Handover Mechanism Globals ***
 // These are populated after device installation and synced with runtime control
 NetDeviceContainer g_mmWaveEnbDevs;  // Store mmWave eNB devices globally
 NetDeviceContainer g_ueDevs;          // Store UE devices globally
-Vector g_bs1Pos, g_bs2Pos;            // BS positions (set after installation)
-double g_txPower[2] = {38.0, 38.0};   // Current TxPower per cell (sync with runtime control)
-double g_currentTilt[2] = {10.0, 10.0}; // Current Tilt per cell (sync with runtime control)
-double g_a3Offset[2] = {0.0, 0.0};    // Per-cell A3 offset (cell handover aggressiveness)
+Vector g_bsPos[N_ENB];               // BS positions indexed 0..3 (set after installation)
+double g_txPower[N_ENB]      = {38.0, 38.0, 38.0, 38.0};  // Current TxPower per cell
+double g_currentTilt[N_ENB]  = {10.0, 10.0, 10.0, 10.0};  // Current Tilt per cell
+double g_a3Offset[N_ENB]     = { 0.0,  0.0,  0.0,  0.0};  // Per-cell A3 offset
 Ptr<MmWaveHelper> g_mmwaveHelper;     // Helper pointer for accessing propagation model
 long g_handoverCount = 0;             // Track handover events
-uint16_t g_cellId1 = 0;               // Cell ID for first eNB (for mapping)
-uint16_t g_cellId2 = 0;               // Cell ID for second eNB (for mapping)
+uint16_t g_cellId[N_ENB] = {0, 0, 0, 0}; // ns-3 cell IDs assigned after installation
 
 // *** TTT and Freeze Timer Configuration ***
 const double HO_TTT = 0.320;          // Time-to-Trigger (seconds)
 const double HO_FREEZE = 2.000;       // Handover freeze timer (seconds)
 std::map<uint32_t, double> g_lastHoTime;       // Last HO time per UE NodeId
 std::map<uint32_t, double> g_hoTriggerStart;   // TTT start time per UE NodeId
+std::map<uint32_t, int>    g_hoTargetCell;     // Target cell index during active TTT
 
-NS_LOG_COMPONENT_DEFINE ("DifferingPowerScenario");
+NS_LOG_COMPONENT_DEFINE ("FutureConnections4gNBScenario");
 
 /**
  * Read VmRSS (physical RAM) of this process from /proc/self/status and
@@ -275,115 +278,112 @@ void HandoverTo(Ptr<MmWaveUeNetDevice> ueDev, Ptr<MmWaveEnbNetDevice> targetEnb)
 }
 
 /**
- * Periodic handover checking function
- * Compares RSRP for both cells and triggers handover if threshold is met
- * Runs every 0.1 seconds
+ * Periodic handover checking function — N-cell A3 with TTT and freeze timer.
+ * For each UE: compute RSRP to all N_ENB cells, find best, trigger HO if
+ * best RSRP > serving RSRP + A3(serving) for HO_TTT consecutive seconds.
+ * Runs every 0.1 s.
  */
 void CheckHandover()
 {
-  if (g_ueDevs.GetN() == 0 || g_mmWaveEnbDevs.GetN() < 2)
+  if (g_ueDevs.GetN() == 0 || (int)g_mmWaveEnbDevs.GetN() < N_ENB)
   {
-    // Not ready yet, reschedule
     Simulator::Schedule(Seconds(0.1), &CheckHandover);
     return;
   }
-  
-  // Get eNB devices
-  Ptr<MmWaveEnbNetDevice> enb1 = DynamicCast<MmWaveEnbNetDevice>(g_mmWaveEnbDevs.Get(0));
-  Ptr<MmWaveEnbNetDevice> enb2 = DynamicCast<MmWaveEnbNetDevice>(g_mmWaveEnbDevs.Get(1));
-  
-  if (!enb1 || !enb2)
+
+  // Collect all eNB device pointers once per tick
+  Ptr<MmWaveEnbNetDevice> enbs[N_ENB];
+  for (int k = 0; k < N_ENB; k++)
   {
-    NS_LOG_WARN("CheckHandover: Failed to get eNB devices");
-    Simulator::Schedule(Seconds(0.1), &CheckHandover);
-    return;
+    enbs[k] = DynamicCast<MmWaveEnbNetDevice>(g_mmWaveEnbDevs.Get(k));
+    if (!enbs[k])
+    {
+      NS_LOG_WARN("CheckHandover: Failed to get eNB device " << k);
+      Simulator::Schedule(Seconds(0.1), &CheckHandover);
+      return;
+    }
   }
-  
-  // Check each UE
+
   for (uint32_t i = 0; i < g_ueDevs.GetN(); ++i)
   {
     Ptr<MmWaveUeNetDevice> ueDev = DynamicCast<MmWaveUeNetDevice>(g_ueDevs.Get(i));
     if (!ueDev) continue;
-    
-    // Get UE position
+
     Ptr<Node> ueNode = ueDev->GetNode();
     if (!ueNode) continue;
-    
+
     Ptr<MobilityModel> ueMob = ueNode->GetObject<MobilityModel>();
     if (!ueMob) continue;
-    
+
     Vector uePos = ueMob->GetPosition();
-    
-    // Calculate RSRP for both cells using realistic propagation model
-    double rsrp1 = CalculateRSRPRealistic(uePos, g_bs1Pos, 0, enb1, ueMob);
-    double rsrp2 = CalculateRSRPRealistic(uePos, g_bs2Pos, 1, enb2, ueMob);
-    
-    // Get current serving cell
+
+    // Compute RSRP to all cells
+    double rsrp[N_ENB];
+    for (int k = 0; k < N_ENB; k++)
+      rsrp[k] = CalculateRSRPRealistic(uePos, g_bsPos[k], k, enbs[k], ueMob);
+
+    // Find serving cell index
     Ptr<MmWaveEnbNetDevice> currentEnb = ueDev->GetTargetEnb();
     if (!currentEnb) continue;
-    
+
+    int servingIdx = -1;
+    for (int k = 0; k < N_ENB; k++)
+    {
+      if (currentEnb == enbs[k]) { servingIdx = k; break; }
+    }
+    if (servingIdx < 0) continue;
+
     uint32_t nodeId = ueNode->GetId();
     double now = Simulator::Now().GetSeconds();
 
-    // Freeze timer check: prevent rapid handovers (ping-pong)
+    // Freeze timer: prevent ping-pong
     if (g_lastHoTime.count(nodeId) && (now - g_lastHoTime[nodeId] < HO_FREEZE))
-    {
       continue;
+
+    // Find best cell (any cell beats the serving by A3)
+    int bestIdx = servingIdx;
+    for (int k = 0; k < N_ENB; k++)
+    {
+      if (k != servingIdx && rsrp[k] > rsrp[bestIdx])
+        bestIdx = k;
     }
 
-    // Determine current and target cell indices
-    int currentIndex = (currentEnb == enb1) ? 0 : 1;
-    
-    // Handover decision: check if neighbor RSRP exceeds serving RSRP + offset
-    bool shouldTrigger = false;
-    if (currentIndex == 0)
-    {
-      if (rsrp2 > rsrp1 + g_a3Offset[0])  // Use Cell 1's A3 offset
-      {
-        shouldTrigger = true;
-      }
-    }
-    else
-    {
-      if (rsrp1 > rsrp2 + g_a3Offset[1])  // Use Cell 2's A3 offset
-      {
-        shouldTrigger = true;
-      }
-    }
-    
-    // TTT Logic: Condition must persist for HO_TTT seconds
+    bool shouldTrigger = (bestIdx != servingIdx) &&
+                         (rsrp[bestIdx] > rsrp[servingIdx] + g_a3Offset[servingIdx]);
+
     if (shouldTrigger)
     {
+      // If the best target cell changed, restart TTT
+      if (g_hoTargetCell.count(nodeId) && g_hoTargetCell[nodeId] != bestIdx)
+        g_hoTriggerStart.erase(nodeId);
+      g_hoTargetCell[nodeId] = bestIdx;
+
       if (!g_hoTriggerStart.count(nodeId))
       {
-        g_hoTriggerStart[nodeId] = now; // Start TTT timer
+        g_hoTriggerStart[nodeId] = now;
       }
       else if (now - g_hoTriggerStart[nodeId] >= HO_TTT)
       {
-        // TTT expired, execute handover
-        int targetIndex = (currentIndex == 0) ? 1 : 0;
-        Ptr<MmWaveEnbNetDevice> targetEnb = (targetIndex == 0) ? enb1 : enb2;
-        
-        HandoverTo(ueDev, targetEnb);
-        
+        HandoverTo(ueDev, enbs[bestIdx]);
         g_lastHoTime[nodeId] = now;
         g_hoTriggerStart.erase(nodeId);
-        
-        NS_LOG_UNCOND("[" << now << "s] Handover: UE (Node " << nodeId 
-                          << ", IMSI " << ueDev->GetImsi() << ") Cell " << (currentIndex+1) 
-                          << " -> Cell " << (targetIndex+1) 
-                          << " (RSRP " << std::fixed << std::setprecision(2) << rsrp1 
-                          << " vs " << rsrp2 << " dBm, A3=" << g_a3Offset[currentIndex] << "dB)");
+        g_hoTargetCell.erase(nodeId);
+
+        NS_LOG_UNCOND("[" << now << "s] HO: UE(Node " << nodeId
+                      << " IMSI " << ueDev->GetImsi() << ") Cell " << (servingIdx+1)
+                      << " -> Cell " << (bestIdx+1)
+                      << " (serving=" << std::fixed << std::setprecision(2) << rsrp[servingIdx]
+                      << " best=" << rsrp[bestIdx]
+                      << " dBm A3=" << g_a3Offset[servingIdx] << "dB)");
       }
     }
     else
     {
-      // Condition not met or no longer met, reset TTT timer
       g_hoTriggerStart.erase(nodeId);
+      g_hoTargetCell.erase(nodeId);
     }
   }
-  
-  // Schedule next check (every 0.1 seconds)
+
   Simulator::Schedule(Seconds(0.1), &CheckHandover);
 }
 
@@ -475,11 +475,13 @@ void CheckHandover()
  
    double currentTime = Simulator::Now().GetSeconds();
    
-   // Format: Time,Cell1_TxPower,Cell1_Tilt,Cell1_A3,Cell2_TxPower,Cell2_Tilt,Cell2_A3
+   // Format: Time,Cell1_TxPower,Cell1_Tilt,Cell1_A3,...,Cell4_TxPower,Cell4_Tilt,Cell4_A3
    g_networkConfigFile << std::fixed << std::setprecision(3)
                        << currentTime << ","
                        << g_txPower[0] << "," << g_currentTilt[0] << "," << g_a3Offset[0] << ","
-                       << g_txPower[1] << "," << g_currentTilt[1] << "," << g_a3Offset[1] << std::endl;
+                       << g_txPower[1] << "," << g_currentTilt[1] << "," << g_a3Offset[1] << ","
+                       << g_txPower[2] << "," << g_currentTilt[2] << "," << g_a3Offset[2] << ","
+                       << g_txPower[3] << "," << g_currentTilt[3] << "," << g_a3Offset[3] << std::endl;
  
    // Schedule next logging (100ms = 0.1s)
    Simulator::Schedule(Seconds(0.1), &LogNetworkConfigurations);
@@ -536,13 +538,9 @@ void CheckHandover()
                         << " TxPower changed to " << newPower << " dBm (PSD updated)");
       
       // *** Sync global variable for handover mechanism ***
-      if (cellId == g_cellId1)
+      for (int k = 0; k < N_ENB; k++)
       {
-        g_txPower[0] = newPower;
-      }
-      else if (cellId == g_cellId2)
-      {
-        g_txPower[1] = newPower;
+        if (cellId == g_cellId[k]) { g_txPower[k] = newPower; break; }
       }
     }
     else
@@ -624,13 +622,9 @@ void CheckHandover()
                     << newTiltRadians << " radians)");
   
   // *** Sync global variable for handover mechanism ***
-  if (cellId == g_cellId1)
+  for (int k = 0; k < N_ENB; k++)
   {
-    g_currentTilt[0] = newTiltDegrees;
-  }
-  else if (cellId == g_cellId2)
-  {
-    g_currentTilt[1] = newTiltDegrees;
+    if (cellId == g_cellId[k]) { g_currentTilt[k] = newTiltDegrees; break; }
   }
 }
 
@@ -653,21 +647,21 @@ void ChangeCellA3Offset(uint16_t cellId, double newA3OffsetDb,
   }
   
   // Update global array based on cell ID
-  if (cellId == g_cellId1)
+  bool found = false;
+  for (int k = 0; k < N_ENB; k++)
   {
-    g_a3Offset[0] = newA3OffsetDb;
-    NS_LOG_UNCOND("[" << Simulator::Now().GetSeconds() << "s] Cell " << cellId 
-                  << " A3 offset changed to " << newA3OffsetDb << " dB");
+    if (cellId == g_cellId[k])
+    {
+      g_a3Offset[k] = newA3OffsetDb;
+      NS_LOG_UNCOND("[" << Simulator::Now().GetSeconds() << "s] Cell " << cellId
+                    << " A3 offset changed to " << newA3OffsetDb << " dB");
+      found = true;
+      break;
+    }
   }
-  else if (cellId == g_cellId2)
+  if (!found)
   {
-    g_a3Offset[1] = newA3OffsetDb;
-    NS_LOG_UNCOND("[" << Simulator::Now().GetSeconds() << "s] Cell " << cellId 
-                  << " A3 offset changed to " << newA3OffsetDb << " dB");
-  }
-  else
-  {
-    NS_LOG_WARN("ChangeCellA3Offset: Invalid cell ID " << cellId);
+    NS_LOG_WARN("ChangeCellA3Offset: Unknown cell ID " << cellId);
   }
 }
  
@@ -682,37 +676,39 @@ void ChangeCellA3Offset(uint16_t cellId, double newA3OffsetDb,
   * The file is deleted after reading to avoid re-execution.
   */
  void CheckControlFile(Ptr<MmWaveEnbNetDevice> enbDev1, Ptr<MmWaveEnbNetDevice> enbDev2,
+                       Ptr<MmWaveEnbNetDevice> enbDev3, Ptr<MmWaveEnbNetDevice> enbDev4,
                        double txPowerMin, double txPowerMax, double tiltMin, double tiltMax,
                        double a3Min, double a3Max, uint32_t pollIntervalMs)
  {
+   Ptr<MmWaveEnbNetDevice> enbDevs[N_ENB] = {enbDev1, enbDev2, enbDev3, enbDev4};
+
    std::string controlFile = "runtime_control.txt";
    std::ifstream file(controlFile);
-   
+
    if (file.good())
    {
      std::string command;
      int cellId;
      double value;
-     
+
      while (file >> command >> cellId >> value)
      {
-       // Validate cell ID
-       if (cellId != 1 && cellId != 2)
+       // Validate cell ID (1-based, must be 1..N_ENB)
+       if (cellId < 1 || cellId > N_ENB)
        {
-         NS_LOG_WARN("Invalid cell ID: " << cellId << " (must be 1 or 2)");
+         NS_LOG_WARN("Invalid cell ID: " << cellId << " (must be 1.." << N_ENB << ")");
          continue;
        }
-       
-       // Get target device
-       Ptr<MmWaveEnbNetDevice> targetDev = (cellId == 1) ? enbDev1 : enbDev2;
+
+       Ptr<MmWaveEnbNetDevice> targetDev = enbDevs[cellId - 1];
        if (!targetDev)
        {
          NS_LOG_ERROR("Invalid device pointer for Cell " << cellId);
          continue;
        }
-       
+
        uint16_t actualCellId = targetDev->GetCellId();
-       
+
        // Execute command
        if (command == "POWER" || command == "power" || command == "P")
        {
@@ -732,19 +728,19 @@ void ChangeCellA3Offset(uint16_t cellId, double newA3OffsetDb,
        }
      }
 
-     
      file.close();
-     
+
      // Delete file after reading to avoid re-execution
      if (std::remove(controlFile.c_str()) != 0)
      {
        NS_LOG_WARN("Failed to delete control file: " << controlFile);
      }
    }
-   
+
    // Schedule next check (configurable interval)
-   Simulator::Schedule(MilliSeconds(pollIntervalMs), &CheckControlFile, enbDev1, enbDev2,
-                      txPowerMin, txPowerMax, tiltMin, tiltMax, a3Min, a3Max, pollIntervalMs);
+   Simulator::Schedule(MilliSeconds(pollIntervalMs), &CheckControlFile,
+                       enbDev1, enbDev2, enbDev3, enbDev4,
+                       txPowerMin, txPowerMax, tiltMin, tiltMax, a3Min, a3Max, pollIntervalMs);
  }
  
  // Global Values
@@ -861,11 +857,17 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
                                                    ns3::DoubleValue (500),
                                                    ns3::MakeDoubleChecker<double> ());
  
- // *** NEW: Differential TxPower Parameters ***
+ // *** Differential TxPower Parameters (one per cell) ***
  static ns3::GlobalValue g_txPower1("TxPower1", "Transmission Power for Cell 1 in dBm",
                                    ns3::DoubleValue(46.0), ns3::MakeDoubleChecker<double>());
- 
+
  static ns3::GlobalValue g_txPower2("TxPower2", "Transmission Power for Cell 2 in dBm",
+                                   ns3::DoubleValue(46.0), ns3::MakeDoubleChecker<double>());
+
+ static ns3::GlobalValue g_txPower3("TxPower3", "Transmission Power for Cell 3 in dBm",
+                                   ns3::DoubleValue(46.0), ns3::MakeDoubleChecker<double>());
+
+ static ns3::GlobalValue g_txPower4("TxPower4", "Transmission Power for Cell 4 in dBm",
                                    ns3::DoubleValue(46.0), ns3::MakeDoubleChecker<double>());
  
  static ns3::GlobalValue g_tilt("Tilt", "Antenna Downtilt in degrees",
@@ -935,8 +937,8 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
  main(int argc, char *argv[]) {
    LogComponentEnableAll(LOG_PREFIX_ALL);
  
-   maxXAxis = 2000;
-   maxYAxis = 2000;
+   maxXAxis = 4600;
+   maxYAxis = 4600;
  
    CommandLine cmd;
    cmd.Parse(argc, argv);
@@ -1024,11 +1026,15 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
    GlobalValue::GetValueByName("controlFileName", stringValue);
    std::string controlFilename = stringValue.Get();
  
-   // Get TxPower1, TxPower2, and Tilt
+   // Get TxPower1..4 and Tilt
    GlobalValue::GetValueByName("TxPower1", doubleValue);
    double txPower1 = doubleValue.Get();
    GlobalValue::GetValueByName("TxPower2", doubleValue);
    double txPower2 = doubleValue.Get();
+   GlobalValue::GetValueByName("TxPower3", doubleValue);
+   double txPower3 = doubleValue.Get();
+   GlobalValue::GetValueByName("TxPower4", doubleValue);
+   double txPower4 = doubleValue.Get();
  
    GlobalValue::GetValueByName("Tilt", doubleValue);
    double tilt = doubleValue.Get();
@@ -1115,10 +1121,13 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
    // Shadowing: enabled for 3GPP, disabled for Hybrid (handled by RandomPropagationLossModel)
    Config::SetDefault("ns3::ThreeGppPropagationLossModel::ShadowingEnabled",BooleanValue(!useHybrid));
    
-   NS_LOG_UNCOND("Differing Power Scenario Parameters:");
+   NS_LOG_UNCOND("FutureConnections 4-gNB Scenario Parameters:");
    NS_LOG_UNCOND("  TxPower Cell 1: " << txPower1 << " dBm");
    NS_LOG_UNCOND("  TxPower Cell 2: " << txPower2 << " dBm");
+   NS_LOG_UNCOND("  TxPower Cell 3: " << txPower3 << " dBm");
+   NS_LOG_UNCOND("  TxPower Cell 4: " << txPower4 << " dBm");
    NS_LOG_UNCOND("  Tilt: " << tilt << " degrees");
+   NS_LOG_UNCOND("  World: " << maxXAxis << " x " << maxYAxis << " m");
    if (useHybrid)
    {
        NS_LOG_UNCOND("  Propagation: Hybrid (LogDistance + Random Shadowing)");
@@ -1228,8 +1237,8 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
    Ptr <MmWavePointToPointEpcHelper> epcHelper = CreateObject<MmWavePointToPointEpcHelper>();
    mmwaveHelper->SetEpcHelper(epcHelper);
  
-   // We enforce 2 nodes for this scenario for simplicity
-   uint8_t nMmWaveEnbNodes = 2; 
+   // 4-gNB irregular layout scenario
+   uint8_t nMmWaveEnbNodes = N_ENB;
  
    GlobalValue::GetValueByName ("N_LteEnbNodes", uintegerValue);
    uint8_t nLteEnbNodes = uintegerValue.Get();
@@ -1267,9 +1276,11 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
    lteEnbNodes.Create(nLteEnbNodes);
    ueNodes.Create(nUeNodes);
  
-   // Split into individual containers for separate configuration
+   // Split into individual containers for per-cell TxPower configuration
    NodeContainer mmWaveEnbNode1 = NodeContainer(mmWaveEnbNodes.Get(0));
    NodeContainer mmWaveEnbNode2 = NodeContainer(mmWaveEnbNodes.Get(1));
+   NodeContainer mmWaveEnbNode3 = NodeContainer(mmWaveEnbNodes.Get(2));
+   NodeContainer mmWaveEnbNode4 = NodeContainer(mmWaveEnbNodes.Get(3));
  
    NodeContainer allEnbNodes;
    allEnbNodes.Add(lteEnbNodes);
@@ -1281,9 +1292,19 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
  
    // Base station height: 15.0m for Hybrid mode (realistic), 3.0m otherwise
    double enbHeight = useHybrid ? 5.0 : 3.0;
+
+   // Irregular 4-gNB layout across 4600×4600 m area.
+   // Coordinates approximate the xApp developer's OMNet++ layout.
+   // Update to exact values once the xApp team provides precise coordinates.
+   //   gNB1: upper-left cluster
+   //   gNB2: upper-right area
+   //   gNB3: lower-center area
+   //   gNB4: right-center area
    Ptr <ListPositionAllocator> enbPositionAlloc = CreateObject<ListPositionAllocator>();
-   enbPositionAlloc->Add(Vector(centerPosition.x - isd_cell/2, centerPosition.y, enbHeight));
-   enbPositionAlloc->Add(Vector(centerPosition.x + isd_cell/2, centerPosition.y, enbHeight));
+   enbPositionAlloc->Add(Vector( 900.0, 3200.0, enbHeight));  // gNB1 — upper-left
+   enbPositionAlloc->Add(Vector(3500.0, 3600.0, enbHeight));  // gNB2 — upper-right
+   enbPositionAlloc->Add(Vector(1800.0,  800.0, enbHeight));  // gNB3 — lower-center
+   enbPositionAlloc->Add(Vector(3800.0, 1600.0, enbHeight));  // gNB4 — right-center
  
    MobilityHelper enbmobility;
    enbmobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
@@ -1293,13 +1314,12 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
    // Install Mobility for UEs (uniformly distributed over the full mobility area)
    Ptr<ListPositionAllocator> uePositionAllocNew = CreateObject<ListPositionAllocator>();
    Ptr<UniformRandomVariable> xPos = CreateObject<UniformRandomVariable>();
-   // Match initial placement to mobility bounds in X: [500, 1500]
-   xPos->SetAttribute("Min", DoubleValue(500.0));
-   xPos->SetAttribute("Max", DoubleValue(1500.0));
+   // Spread UEs across the full 4600×4600 m deployment area
+   xPos->SetAttribute("Min", DoubleValue(200.0));
+   xPos->SetAttribute("Max", DoubleValue(4400.0));
    Ptr<UniformRandomVariable> yPos = CreateObject<UniformRandomVariable>();
-   // Match initial placement to mobility bounds in Y: [800, 1200]
-   yPos->SetAttribute("Min", DoubleValue(800.0));
-   yPos->SetAttribute("Max", DoubleValue(1200.0));
+   yPos->SetAttribute("Min", DoubleValue(200.0));
+   yPos->SetAttribute("Max", DoubleValue(4400.0));
  
    for (uint32_t i = 0; i < ues; i++) {
        uePositionAllocNew->Add(Vector(xPos->GetValue(), yPos->GetValue(), 1.5));
@@ -1324,11 +1344,8 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
        // Group 3: medium speed 15 m/s (30%) - local topology variations, change direction every 5s
        // Distribution: 50/20/30 split for maximum state diversity
  
-       // Common bounds for all mobile groups (same as RandomWalk2d used before)
-       Rectangle bounds (centerPosition.x - isd_cell,
-                         centerPosition.x + isd_cell,
-                         centerPosition.y - 200,
-                         centerPosition.y + 200);
+       // Common bounds: full 4600×4600 m deployment area
+       Rectangle bounds (200.0, 4400.0, 200.0, 4400.0);
  
        // Helpers for each group, all sharing the same initial position allocator
        MobilityHelper mobFast;     // Group 1: 30 m/s
@@ -1408,74 +1425,73 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
  
    NetDeviceContainer lteEnbDevs = mmwaveHelper->InstallLteEnbDevice(lteEnbNodes);
  
-   // *** Differential Power Installation ***
-   
-   // Install Cell 1
+   // *** Per-cell TxPower Installation (4 cells) ***
    Config::SetDefault("ns3::MmWaveEnbPhy::TxPower", DoubleValue(txPower1));
    NetDeviceContainer mmWaveEnbDev1 = mmwaveHelper->InstallEnbDevice(mmWaveEnbNode1);
- 
-   // Install Cell 2
+
    Config::SetDefault("ns3::MmWaveEnbPhy::TxPower", DoubleValue(txPower2));
    NetDeviceContainer mmWaveEnbDev2 = mmwaveHelper->InstallEnbDevice(mmWaveEnbNode2);
- 
-   // Merge Device Containers for tracking
+
+   Config::SetDefault("ns3::MmWaveEnbPhy::TxPower", DoubleValue(txPower3));
+   NetDeviceContainer mmWaveEnbDev3 = mmwaveHelper->InstallEnbDevice(mmWaveEnbNode3);
+
+   Config::SetDefault("ns3::MmWaveEnbPhy::TxPower", DoubleValue(txPower4));
+   NetDeviceContainer mmWaveEnbDev4 = mmwaveHelper->InstallEnbDevice(mmWaveEnbNode4);
+
+   // Merge all into single tracking container (order matches g_bsPos[0..3])
    NetDeviceContainer mmWaveEnbDevs;
    mmWaveEnbDevs.Add(mmWaveEnbDev1);
    mmWaveEnbDevs.Add(mmWaveEnbDev2);
-   
+   mmWaveEnbDevs.Add(mmWaveEnbDev3);
+   mmWaveEnbDevs.Add(mmWaveEnbDev4);
+
    // *** Store device pointers for runtime control ***
    Ptr<MmWaveEnbNetDevice> enbDev1 = mmWaveEnbDev1.Get(0)->GetObject<MmWaveEnbNetDevice>();
    Ptr<MmWaveEnbNetDevice> enbDev2 = mmWaveEnbDev2.Get(0)->GetObject<MmWaveEnbNetDevice>();
-   
-   if (!enbDev1 || !enbDev2)
+   Ptr<MmWaveEnbNetDevice> enbDev3 = mmWaveEnbDev3.Get(0)->GetObject<MmWaveEnbNetDevice>();
+   Ptr<MmWaveEnbNetDevice> enbDev4 = mmWaveEnbDev4.Get(0)->GetObject<MmWaveEnbNetDevice>();
+
+   if (!enbDev1 || !enbDev2 || !enbDev3 || !enbDev4)
    {
-     NS_FATAL_ERROR("Failed to get MmWaveEnbNetDevice pointers for runtime control");
+     NS_FATAL_ERROR("Failed to get MmWaveEnbNetDevice pointers for one or more cells");
    }
-   
-  uint16_t cellId1 = enbDev1->GetCellId();
-  uint16_t cellId2 = enbDev2->GetCellId();
-  
+
   // *** Store globally for handover mechanism ***
   g_mmWaveEnbDevs = mmWaveEnbDevs;
-  g_mmwaveHelper = mmwaveHelper;
-  g_cellId1 = cellId1;
-  g_cellId2 = cellId2;
-  
-  // Store BS positions globally
-  Ptr<MobilityModel> enb1Mob = mmWaveEnbNode1.Get(0)->GetObject<MobilityModel>();
-  Ptr<MobilityModel> enb2Mob = mmWaveEnbNode2.Get(0)->GetObject<MobilityModel>();
-  if (enb1Mob && enb2Mob)
+  g_mmwaveHelper  = mmwaveHelper;
+
+  Ptr<MmWaveEnbNetDevice> enbDevArr[N_ENB] = {enbDev1, enbDev2, enbDev3, enbDev4};
+  NodeContainer* enbNodeArr[N_ENB] = {&mmWaveEnbNode1, &mmWaveEnbNode2,
+                                       &mmWaveEnbNode3, &mmWaveEnbNode4};
+
+  for (int k = 0; k < N_ENB; k++)
   {
-    g_bs1Pos = enb1Mob->GetPosition();
-    g_bs2Pos = enb2Mob->GetPosition();
+    g_cellId[k]      = enbDevArr[k]->GetCellId();
+    g_txPower[k]     = (k==0) ? txPower1 : (k==1) ? txPower2 : (k==2) ? txPower3 : txPower4;
+    g_currentTilt[k] = tilt;
+    Ptr<MobilityModel> mob = enbNodeArr[k]->Get(0)->GetObject<MobilityModel>();
+    if (mob) g_bsPos[k] = mob->GetPosition();
   }
-  
-  // Initialize globals from command line args
-  g_txPower[0] = txPower1;
-  g_txPower[1] = txPower2;
-  // Note: Both cells start with the same tilt value (from --Tilt flag)
-  // Individual cell tilts can be changed later via runtime control
-  g_currentTilt[0] = tilt;
-  g_currentTilt[1] = tilt;
-  
+
   // Log handover configuration
-  NS_LOG_UNCOND("=== Handover Mechanism Enabled ===");
-  NS_LOG_UNCOND("  A3 Offset Cell 1: " << g_a3Offset[0] << " dB, Cell 2: " << g_a3Offset[1] << " dB");
-  NS_LOG_UNCOND("  Handover checking interval: 0.1 seconds");
-  NS_LOG_UNCOND("  Cell " << cellId1 << " position: (" << g_bs1Pos.x << ", " << g_bs1Pos.y << ", " << g_bs1Pos.z << ")");
-  NS_LOG_UNCOND("  Cell " << cellId2 << " position: (" << g_bs2Pos.x << ", " << g_bs2Pos.y << ", " << g_bs2Pos.z << ")");
-  
-  // Log action space configuration
-   if (enableRuntimeControl)
-   {
-     NS_LOG_UNCOND("=== Runtime Control Enabled ===");
-     NS_LOG_UNCOND("  Control file: runtime_control.txt (polling every " << controlPollIntervalMs << "ms simulation time)");
-     NS_LOG_UNCOND("  TxPower action space: [" << txPowerMin << ", " << txPowerMax << "] dBm");
-     NS_LOG_UNCOND("  E-Tilt action space: [" << tiltMin << ", " << tiltMax << "] degrees");
-     NS_LOG_UNCOND("  Cell " << cellId1 << " -> enbDev1");
-     NS_LOG_UNCOND("  Cell " << cellId2 << " -> enbDev2");
-     NS_LOG_UNCOND("  Command format: POWER <cellId> <value>  or  TILT <cellId> <value>");
-   }
+  NS_LOG_UNCOND("=== Handover Mechanism Enabled (4 cells) ===");
+  for (int k = 0; k < N_ENB; k++)
+  {
+    NS_LOG_UNCOND("  Cell " << (k+1) << " (ns3 cellId=" << g_cellId[k]
+                  << ") pos=(" << g_bsPos[k].x << "," << g_bsPos[k].y << ")"
+                  << " txPower=" << g_txPower[k] << " dBm"
+                  << " A3=" << g_a3Offset[k] << " dB");
+  }
+  NS_LOG_UNCOND("  TTT=" << HO_TTT << "s  Freeze=" << HO_FREEZE << "s");
+
+  if (enableRuntimeControl)
+  {
+    NS_LOG_UNCOND("=== Runtime Control Enabled ===");
+    NS_LOG_UNCOND("  Control file: runtime_control.txt (polling every " << controlPollIntervalMs << "ms)");
+    NS_LOG_UNCOND("  TxPower range: [" << txPowerMin << ", " << txPowerMax << "] dBm");
+    NS_LOG_UNCOND("  E-Tilt range:  [" << tiltMin    << ", " << tiltMax    << "] degrees");
+    NS_LOG_UNCOND("  Command format: POWER|TILT|A3 <cellId 1-4> <value>");
+  }
  
    // *** Hybrid Mode: Chain RandomPropagationLossModel for shadowing ***
    if (useHybrid)
@@ -1530,33 +1546,25 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
        return std::sqrt(std::pow(a.x - b.x, 2) + std::pow(a.y - b.y, 2) + std::pow(a.z - b.z, 2));
    };
  
-   // Custom Attachment: Attach to Best Server (Highest Estimated RxPower)
-   // Approximated as: RxPower_dB = TxPower_dBm - 20*log10(Distance)
+   // Custom Attachment: attach each UE to the cell with highest estimated RxPower
+   // Uses simple distance-based pathloss (Friis approximation) for initial association
+   double initTxPowers[N_ENB] = {txPower1, txPower2, txPower3, txPower4};
+
    for (uint32_t u = 0; u < ueDevs.GetN(); ++u) {
        Ptr<NetDevice> ueDev = ueDevs.Get(u);
        Ptr<Node> ueNode = ueNodes.Get(u);
        Vector uePos = ueNode->GetObject<MobilityModel>()->GetPosition();
- 
-       // Check Cell 1
-       Ptr<Node> enb1Node = mmWaveEnbNode1.Get(0);
-       Vector enb1Pos = enb1Node->GetObject<MobilityModel>()->GetPosition();
-       double dist1 = CalculateDistance(uePos, enb1Pos);
-       // Protect against dist=0
-       double pathloss1 = (dist1 > 0) ? 20 * std::log10(dist1) : 0;
-       double estRxPower1 = txPower1 - pathloss1;
- 
-       // Check Cell 2
-       Ptr<Node> enb2Node = mmWaveEnbNode2.Get(0);
-       Vector enb2Pos = enb2Node->GetObject<MobilityModel>()->GetPosition();
-       double dist2 = CalculateDistance(uePos, enb2Pos);
-       double pathloss2 = (dist2 > 0) ? 20 * std::log10(dist2) : 0;
-       double estRxPower2 = txPower2 - pathloss2;
- 
-       if (estRxPower1 >= estRxPower2) {
-           mmwaveHelper->AttachToEnbWithIndex(ueDev, mmWaveEnbDevs, 0);
-       } else {
-           mmwaveHelper->AttachToEnbWithIndex(ueDev, mmWaveEnbDevs, 1);
+
+       int bestCell = 0;
+       double bestRxPower = -1e9;
+       for (int k = 0; k < N_ENB; k++)
+       {
+           double dist = CalculateDistance(uePos, g_bsPos[k]);
+           double pl   = (dist > 0) ? 20 * std::log10(dist) : 0;
+           double rxPow = initTxPowers[k] - pl;
+           if (rxPow > bestRxPower) { bestRxPower = rxPow; bestCell = k; }
        }
+       mmwaveHelper->AttachToEnbWithIndex(ueDev, mmWaveEnbDevs, bestCell);
    }
  
   GlobalValue::GetValueByName ("simTime", doubleValue);
@@ -1665,7 +1673,7 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
    g_networkConfigFile.open(configFile, std::ios::out);
    if (g_networkConfigFile.is_open())
    {
-     g_networkConfigFile << "Time(s),Cell1_TxPower,Cell1_Tilt,Cell1_A3,Cell2_TxPower,Cell2_Tilt,Cell2_A3" << std::endl;
+     g_networkConfigFile << "Time(s),Cell1_TxPower,Cell1_Tilt,Cell1_A3,Cell2_TxPower,Cell2_Tilt,Cell2_A3,Cell3_TxPower,Cell3_Tilt,Cell3_A3,Cell4_TxPower,Cell4_Tilt,Cell4_A3" << std::endl;
      NS_LOG_UNCOND("Network configuration export enabled. Writing to: " << configFile);
      
      // Start logging from t=0.1s
@@ -1687,7 +1695,8 @@ static ns3::GlobalValue g_enableEnergyMonitoring("enableEnergyMonitoring",
   // *** Start external runtime control file polling (if enabled) ***
   if (enableRuntimeControl)
   {
-    Simulator::Schedule(Seconds(0.1), &CheckControlFile, enbDev1, enbDev2,
+    Simulator::Schedule(Seconds(0.1), &CheckControlFile,
+                        enbDev1, enbDev2, enbDev3, enbDev4,
                         txPowerMin, txPowerMax, tiltMin, tiltMax, a3Min, a3Max, controlPollIntervalMs);
     NS_LOG_UNCOND("Runtime control polling started. Waiting for commands in runtime_control.txt");
   }

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Extract cell-level simulation metrics from NS-3 O-RAN simulation output files.
-Specifically designed to process the outputs of xapp_template.py.
-Converts raw simulation data into a time-series CSV format.
+Extract cell-level simulation metrics from NS-3 O-RAN FutureConnections 4-gNB outputs.
+Specifically designed to process the outputs of xapp_template_futureconnections.py.
 """
 
 import os
@@ -12,11 +11,17 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-# RSRP constants — exact match to CalculateRSRPRealistic() in scenario C++ code
-BS_POS_3D    = {1: (750.0, 1000.0, 5.0), 2: (1250.0, 1000.0, 5.0)}
+N_CELLS = 4
+
+BS_POS_3D = {
+    1: (900.0,  3200.0, 5.0),
+    2: (3500.0, 3600.0, 5.0),
+    3: (1800.0,  800.0, 5.0),
+    4: (3800.0, 1600.0, 5.0),
+}
 LOG_DIST_EXP = 3.8
-LOG_DIST_REF = 43.3   # dB at d0=1m
-HPBW         = 10.0   # half-power beamwidth (degrees)
+LOG_DIST_REF = 43.3
+HPBW         = 10.0
 
 def compute_rsrp(ue_x, ue_y, ue_z, cell_id, tx_power, tilt):
     bx, by, bz = BS_POS_3D[cell_id]
@@ -69,7 +74,7 @@ def load_du_metrics(path):
     try:
         df = pd.read_csv(path)
         df['time'] = normalize_timestamp_series(df['timestamp'])
-        
+
         metrics = {
             'L1M.RS-SINR.Bin34': 'sum',
             'L1M.RS-SINR.Bin46': 'sum',
@@ -81,7 +86,6 @@ def load_du_metrics(path):
             'RRU.PrbUsedDl': 'sum',
             'dlPrbUsage': 'mean',
             'ulPrbUsage': 'mean',
-            # PER: sum UE-level TB counts per epoch, compute ratio after groupby
             'TB.TotNbrDl.1.UEID': 'sum',
             'TB.ErrTotalNbrDl.1.UEID': 'sum',
         }
@@ -95,7 +99,6 @@ def load_du_metrics(path):
 
         df_agg = df.groupby('time').agg(agg_dict).reset_index()
 
-        # PER: err TBs / total TBs, clipped to [0, 1]
         tot_col = next((c for c in df_agg.columns if c.strip() == 'TB.TotNbrDl.1.UEID'), None)
         err_col = next((c for c in df_agg.columns if c.strip() == 'TB.ErrTotalNbrDl.1.UEID'), None)
         if tot_col and err_col:
@@ -103,7 +106,6 @@ def load_du_metrics(path):
             df_agg['per'] = np.nan
             df_agg.loc[mask, 'per'] = (df_agg.loc[mask, err_col] / df_agg.loc[mask, tot_col]).clip(0, 1)
 
-        # PRB utilization: dlPrbUsage is 0-100 percentage
         prb_col = next((c for c in df_agg.columns if c.strip() == 'dlPrbUsage'), None)
         if prb_col:
             df_agg['prb_util'] = (df_agg[prb_col] / 100.0).clip(0, 1)
@@ -116,11 +118,11 @@ def load_du_metrics(path):
 def compute_cell_avg_sinr(du_df):
     if du_df is None or du_df.empty:
         return None
-    
+
     sinr_cols = [c for c in du_df.columns if "L1M.RS-SINR.Bin" in c and not c.endswith(".UEID")]
     if not sinr_cols:
         return None
-    
+
     sinr_cols = sorted(sinr_cols)
     centers_dB = []
     for c in sinr_cols:
@@ -130,24 +132,17 @@ def compute_cell_avg_sinr(du_df):
             centers_dB.append(sinr_bin_index_to_dB(float(part)))
         except ValueError:
             centers_dB.append(0.0)
-            
+
     centers_arr = np.array(centers_dB, dtype=float)
-    
-    result_times = []
-    result_sinr = []
-    
-    for idx, row in du_df.iterrows():
+
+    result_times, result_sinr = [], []
+    for _, row in du_df.iterrows():
         counts = np.array([row[c] for c in sinr_cols], dtype=float)
         counts[np.isnan(counts)] = 0.0
         total = counts.sum()
-        
-        if total > 0:
-            result_times.append(row['time'])
-            result_sinr.append((counts * centers_arr).sum() / total)
-        else:
-            result_times.append(row['time'])
-            result_sinr.append(np.nan)
-            
+        result_times.append(row['time'])
+        result_sinr.append((counts * centers_arr).sum() / total if total > 0 else np.nan)
+
     return pd.DataFrame({'time': result_times, 'avg_sinr_db': result_sinr})
 
 def load_rlc_stats(path):
@@ -158,25 +153,22 @@ def load_rlc_stats(path):
                          names=['start', 'end', 'CellId', 'IMSI', 'RNTI', 'LCID',
                                 'nTxPDUs', 'TxBytes', 'nRxPDUs', 'RxBytes', 'delay',
                                 'stdDev', 'min', 'max', 'PduSize', 'stdDev2', 'min2', 'max2'])
-        
+
         df['_time'] = df['end']
         df['window'] = df['end'] - df['start']
         df['rx_throughput_kbps'] = ((df['RxBytes'] * 8 / 1000) / df['window']).clip(upper=10000.0)
         df['latency_ms'] = df['delay'] * 1000
-        # Packet loss: clip to [0,1] to handle epoch-boundary RxBytes > TxBytes artifacts
         df['pkt_loss'] = ((df['TxBytes'] - df['RxBytes']) / df['TxBytes'].clip(lower=1)).clip(0, 1)
 
         result = {}
-        for cell_id in [1, 2]:
+        for cell_id in range(1, N_CELLS + 1):
             cell_data = df[df['CellId'] == cell_id].copy()
             if not cell_data.empty:
-                metrics = {
+                cell_agg = cell_data.groupby('_time').agg({
                     'rx_throughput_kbps': 'mean',
                     'latency_ms': 'mean',
                     'pkt_loss': 'mean',
-                }
-                cell_agg = cell_data.groupby('_time').agg(metrics).reset_index()
-                cell_agg.rename(columns={'_time': 'time'}, inplace=True)
+                }).reset_index().rename(columns={'_time': 'time'})
                 result[f'cell{cell_id}'] = cell_agg
             else:
                 result[f'cell{cell_id}'] = None
@@ -186,7 +178,6 @@ def load_rlc_stats(path):
         return None
 
 def load_cell_rsrp(pos_path, netconf_path):
-    """Compute per-cell average RSRP (dBm) per epoch from UEPosition + NetworkConfigurations."""
     if not os.path.exists(pos_path):
         return None
     try:
@@ -202,7 +193,7 @@ def load_cell_rsrp(pos_path, netconf_path):
             netconf = netconf.sort_values('time').reset_index(drop=True)
 
         result = {}
-        for cell_id in [1, 2]:
+        for cell_id in range(1, N_CELLS + 1):
             cell_pos = pos_df[pos_df['CellID'] == cell_id].copy()
             if cell_pos.empty:
                 result[f'cell{cell_id}'] = None
@@ -306,151 +297,122 @@ def extract_metrics_from_dir(input_dir):
     print(f"Extracting metrics from: {run_path}")
 
     net_config = load_network_config(run_path / "NetworkConfigurations.txt")
-    cucp_cell1 = load_cucp_metrics(run_path / "cu-cp-cell-1.txt")
-    cucp_cell2 = load_cucp_metrics(run_path / "cu-cp-cell-2.txt")
-    du_cell1 = load_du_metrics(run_path / "du-cell-1.txt")
-    du_cell2 = load_du_metrics(run_path / "du-cell-2.txt")
-    rlc_stats = load_rlc_stats(run_path / "DlE2RlcStats.txt")
+    rlc_stats  = load_rlc_stats(run_path / "DlE2RlcStats.txt")
     rsrp_stats = load_cell_rsrp(run_path / "UEPosition.txt", run_path / "NetworkConfigurations.txt")
     _, cell_rsrq = load_rxtrace_rsrq(run_path / "RxPacketTrace.txt", run_path / "DlE2RlcStats.txt")
 
-    sinr_cell1 = compute_cell_avg_sinr(du_cell1) if du_cell1 is not None else None
-    sinr_cell2 = compute_cell_avg_sinr(du_cell2) if du_cell2 is not None else None
-    
-    # Establish a time index
+    cucp_per_cell = {}
+    du_per_cell   = {}
+    sinr_per_cell = {}
+    for cid in range(1, N_CELLS + 1):
+        cucp_per_cell[cid] = load_cucp_metrics(run_path / f"cu-cp-cell-{cid}.txt")
+        du_df = load_du_metrics(run_path / f"du-cell-{cid}.txt")
+        du_per_cell[cid]   = du_df
+        sinr_per_cell[cid] = compute_cell_avg_sinr(du_df) if du_df is not None else None
+
     max_time = 50.0
     if net_config is not None and not net_config.empty:
         max_time = max(max_time, net_config['time'].max() + 1.0)
     time_index = pd.DataFrame({'time': np.arange(0.1, max_time, 0.1).round(1)})
-    
+
     merged_df = time_index.copy()
-    
+
     if net_config is not None:
         merged_df = merged_df.merge(net_config, on='time', how='left')
-        
-    if cucp_cell1 is not None:
-        merged_df = merged_df.merge(cucp_cell1.rename(columns={'numActiveUes': 'numActiveUes_cell1'}), on='time', how='left')
-    if cucp_cell2 is not None:
-        merged_df = merged_df.merge(cucp_cell2.rename(columns={'numActiveUes': 'numActiveUes_cell2'}), on='time', how='left')
-        
-    if sinr_cell1 is not None:
-        merged_df = merged_df.merge(sinr_cell1.rename(columns={'avg_sinr_db': 'avg_sinr_db_cell1'}), on='time', how='left')
-    if sinr_cell2 is not None:
-        merged_df = merged_df.merge(sinr_cell2.rename(columns={'avg_sinr_db': 'avg_sinr_db_cell2'}), on='time', how='left')
-        
-    if rlc_stats is not None:
-        if rlc_stats.get('cell1') is not None:
-            rlc_cell1 = rlc_stats['cell1'].copy()
-            rlc_cell1.rename(columns={
-                'rx_throughput_kbps': 'avg_ue_throughput_kbps_cell1',
-                'latency_ms': 'avg_ue_latency_ms_cell1',
-                'pkt_loss': 'pkt_loss_cell1',
-            }, inplace=True)
-            merged_df = merged_df.merge(rlc_cell1, on='time', how='left')
-        if rlc_stats.get('cell2') is not None:
-            rlc_cell2 = rlc_stats['cell2'].copy()
-            rlc_cell2.rename(columns={
-                'rx_throughput_kbps': 'avg_ue_throughput_kbps_cell2',
-                'latency_ms': 'avg_ue_latency_ms_cell2',
-                'pkt_loss': 'pkt_loss_cell2',
-            }, inplace=True)
-            merged_df = merged_df.merge(rlc_cell2, on='time', how='left')
 
-    # Merge PER and PRB from DU metrics
-    for cell_id, du_df in [(1, du_cell1), (2, du_cell2)]:
+    for cid in range(1, N_CELLS + 1):
+        if cucp_per_cell[cid] is not None:
+            merged_df = merged_df.merge(
+                cucp_per_cell[cid].rename(columns={'numActiveUes': f'numActiveUes_cell{cid}'}),
+                on='time', how='left'
+            )
+        if sinr_per_cell[cid] is not None:
+            merged_df = merged_df.merge(
+                sinr_per_cell[cid].rename(columns={'avg_sinr_db': f'avg_sinr_db_cell{cid}'}),
+                on='time', how='left'
+            )
+        if rlc_stats is not None and rlc_stats.get(f'cell{cid}') is not None:
+            rlc_df = rlc_stats[f'cell{cid}'].rename(columns={
+                'rx_throughput_kbps': f'avg_ue_throughput_kbps_cell{cid}',
+                'latency_ms':         f'avg_ue_latency_ms_cell{cid}',
+                'pkt_loss':           f'pkt_loss_cell{cid}',
+            })
+            merged_df = merged_df.merge(rlc_df, on='time', how='left')
+
+        du_df = du_per_cell[cid]
         if du_df is not None:
             extra_cols = ['time']
-            if 'per' in du_df.columns:
-                extra_cols.append('per')
-            if 'prb_util' in du_df.columns:
-                extra_cols.append('prb_util')
+            if 'per'      in du_df.columns: extra_cols.append('per')
+            if 'prb_util' in du_df.columns: extra_cols.append('prb_util')
             if len(extra_cols) > 1:
-                suffix = f'_cell{cell_id}'
                 extra_df = du_df[extra_cols].copy()
-                extra_df.rename(columns={c: c + suffix for c in extra_cols if c != 'time'}, inplace=True)
+                extra_df.rename(columns={c: f'{c}_cell{cid}' for c in extra_cols if c != 'time'}, inplace=True)
                 merged_df = merged_df.merge(extra_df, on='time', how='left')
 
-    # Merge cell-avg RSRP
-    if rsrp_stats is not None:
-        for cell_id in [1, 2]:
-            rsrp_df = rsrp_stats.get(f'cell{cell_id}')
-            if rsrp_df is not None:
-                rsrp_df = rsrp_df.rename(columns={'rsrp_dbm': f'rsrp_dbm_cell{cell_id}'})
-                merged_df = merged_df.merge(rsrp_df, on='time', how='left')
+        if rsrp_stats is not None and rsrp_stats.get(f'cell{cid}') is not None:
+            rsrp_df = rsrp_stats[f'cell{cid}'].rename(columns={'rsrp_dbm': f'rsrp_dbm_cell{cid}'})
+            merged_df = merged_df.merge(rsrp_df, on='time', how='left')
 
-    # Merge RxPacketTrace-based RSRQ (cell average per 100 ms epoch)
-    for cell_id in [1, 2]:
-        rsrq_df = cell_rsrq.get(cell_id)
+        # Merge RxPacketTrace-based RSRQ (cell average per 100 ms epoch)
+        rsrq_df = cell_rsrq.get(cid)
         if rsrq_df is not None:
             merged_df = merged_df.merge(
-                rsrq_df.rename(columns={'avg_rsrq_dB': f'avg_rsrq_dB_cell{cell_id}'}),
+                rsrq_df.rename(columns={'avg_rsrq_dB': f'avg_rsrq_dB_cell{cid}'}),
                 on='time', how='left'
             )
 
-    # Drop totally empty rows
     data_cols = [c for c in merged_df.columns if c != 'time']
     merged_df = merged_df.dropna(subset=data_cols, how='all')
 
-    # Select only our target columns
-    essential_cols = [
-        'time',
-        'Cell1_TxPower', 'Cell1_Tilt', 'Cell1_A3',
-        'Cell2_TxPower', 'Cell2_Tilt', 'Cell2_A3',
-        'numActiveUes_cell1', 'numActiveUes_cell2',
-        'avg_sinr_db_cell1', 'avg_sinr_db_cell2',
-        'avg_ue_throughput_kbps_cell1', 'avg_ue_throughput_kbps_cell2',
-        'avg_ue_latency_ms_cell1', 'avg_ue_latency_ms_cell2',
-        'pkt_loss_cell1', 'pkt_loss_cell2',
-        'per_cell1', 'per_cell2',
-        'prb_util_cell1', 'prb_util_cell2',
-        'rsrp_dbm_cell1', 'rsrp_dbm_cell2',
-        'avg_rsrq_dB_cell1', 'avg_rsrq_dB_cell2',
-    ]
-    
+    essential_cols = ['time']
+    for cid in range(1, N_CELLS + 1):
+        essential_cols += [
+            f'Cell{cid}_TxPower', f'Cell{cid}_Tilt', f'Cell{cid}_A3',
+            f'numActiveUes_cell{cid}',
+            f'avg_sinr_db_cell{cid}',
+            f'avg_ue_throughput_kbps_cell{cid}',
+            f'avg_ue_latency_ms_cell{cid}',
+            f'pkt_loss_cell{cid}',
+            f'per_cell{cid}',
+            f'prb_util_cell{cid}',
+            f'rsrp_dbm_cell{cid}',
+            f'avg_rsrq_dB_cell{cid}',
+        ]
+
     available_cols = [col for col in essential_cols if col in merged_df.columns]
     merged_df = merged_df[available_cols]
-    
-    # Split into two dataframes
-    cell1_cols = ['time'] + [c for c in merged_df.columns if 'Cell1' in c or 'cell1' in c]
-    cell2_cols = ['time'] + [c for c in merged_df.columns if 'Cell2' in c or 'cell2' in c]
-    
-    df_cell1 = merged_df[cell1_cols].copy()
-    df_cell1.rename(columns=lambda x: x.replace('Cell1_', '').replace('_cell1', ''), inplace=True)
-    df_cell1 = df_cell1.dropna(subset=[c for c in df_cell1.columns if c != 'time'], how='all')
-    
-    df_cell2 = merged_df[cell2_cols].copy()
-    df_cell2.rename(columns=lambda x: x.replace('Cell2_', '').replace('_cell2', ''), inplace=True)
-    df_cell2 = df_cell2.dropna(subset=[c for c in df_cell2.columns if c != 'time'], how='all')
-    
-    return {'cell1': df_cell1, 'cell2': df_cell2}
+
+    result = {}
+    for cid in range(1, N_CELLS + 1):
+        cell_cols = ['time'] + [c for c in merged_df.columns if f'Cell{cid}_' in c or f'_cell{cid}' in c]
+        df_cell = merged_df[cell_cols].copy()
+        df_cell.rename(columns=lambda x: x.replace(f'Cell{cid}_', '').replace(f'_cell{cid}', ''), inplace=True)
+        df_cell = df_cell.dropna(subset=[c for c in df_cell.columns if c != 'time'], how='all')
+        result[f'cell{cid}'] = df_cell
+
+    return result
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract Cell-Level metrics from xApp outputs")
-    parser.add_argument('--input-dir', type=str, 
-                        default='xapp_template_outputs',
-                        help='Input directory containing simulation outputs (default: xapp_template_outputs)')
-    parser.add_argument('--output-dir', type=str,
-                        default='ns3_sim_timeseries_data',
-                        help='Output directory for CSV files (default: ns3_sim_timeseries_data)')
-    parser.add_argument('--output-prefix', type=str,
-                        default='cell_level_metrics',
-                        help='Output CSV file prefix (default: cell_level_metrics)')
-                        
+    parser = argparse.ArgumentParser(description="Extract Cell-Level metrics from FutureConnections 4-gNB outputs")
+    parser.add_argument('--input-dir',     type=str, default='xapp_futureconnections_outputs')
+    parser.add_argument('--output-dir',    type=str, default='ns3_sim_timeseries_data')
+    parser.add_argument('--output-prefix', type=str, default='fc_cell_level_metrics')
     args = parser.parse_args()
-    
-    base_dir = Path(__file__).parent
-    input_path = base_dir / args.input_dir
-    output_dir = base_dir / args.output_dir
+
+    base_dir    = Path(__file__).parent
+    input_path  = base_dir / args.input_dir
+    output_dir  = base_dir / args.output_dir
     output_prefix = args.output_prefix
-    
+
     if not input_path.exists():
         print(f"Error: Input directory {input_path} does not exist.")
         return
-        
+
     output_dir.mkdir(parents=True, exist_ok=True)
-        
+
     metrics_dict = extract_metrics_from_dir(input_path)
-    
+
     for cell_name, df in metrics_dict.items():
         if df is not None and not df.empty:
             output_file = output_dir / f"{output_prefix}_{cell_name}.csv"

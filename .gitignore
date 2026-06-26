@@ -39,4 +39,5 @@ Thumbs.db
 ns3_sim_outputs/
 sim_output/
 xapp_template_outputs/
+xapp_futureconnections_outputs/
 ns3_sim_timeseries_data/
