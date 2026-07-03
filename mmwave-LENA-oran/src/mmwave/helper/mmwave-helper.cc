@@ -3237,12 +3237,17 @@ MmWaveHelper::EnableE2PdcpTraces (void)
     m_e2PdcpStats->SetAttribute("DlPdcpOutputFilename", StringValue("DlE2PdcpStats.txt"));
     m_e2PdcpStats->SetAttribute("UlPdcpOutputFilename", StringValue("UlE2PdcpStats.txt"));
     m_e2PdcpStats->SetAttribute("EpochDuration", TimeValue(Seconds(0.1)));  // 100ms to match BuildGUICuUp frequency
+    // Offset the epoch grid from the 100 ms E2 KPM report grid: with both on
+    // the same grid, EndEpoch (ShowResults + ResetResults) runs first at every
+    // boundary and the KPM report always reads freshly-reset (all-zero) stats.
+    m_e2PdcpStats->SetAttribute("StartTime", TimeValue(MilliSeconds(50)));
     m_radioBearerStatsConnector->EnableE2PdcpStats (m_e2PdcpStats);
 
     m_e2PdcpStatsLte = CreateObject<MmWaveBearerStatsCalculator> ("E2PDCPLTE");
     m_e2PdcpStatsLte->SetAttribute("DlPdcpOutputFilename", StringValue("DlE2PdcpStatsLte.txt"));
     m_e2PdcpStatsLte->SetAttribute("UlPdcpOutputFilename", StringValue("UlE2PdcpStatsLte.txt"));
     m_e2PdcpStatsLte->SetAttribute("EpochDuration", TimeValue(Seconds(0.1)));  // 100ms to match BuildGUICuUp frequency
+    m_e2PdcpStatsLte->SetAttribute("StartTime", TimeValue(MilliSeconds(50)));
     m_radioBearerStatsConnector->EnableE2PdcpStats (m_e2PdcpStatsLte);
   }
   else
@@ -3267,12 +3272,17 @@ MmWaveHelper::EnableE2RlcTraces (void)
     m_e2RlcStats->SetAttribute("DlPdcpOutputFilename", StringValue("DlE2RlcStats.txt"));
     m_e2RlcStats->SetAttribute("UlPdcpOutputFilename", StringValue("UlE2RlcStats.txt"));
     m_e2RlcStats->SetAttribute("EpochDuration", TimeValue(Seconds(0.1)));  // 100ms to match BuildGUICuUp frequency
+    // Offset the epoch grid from the 100 ms E2 KPM report grid: with both on
+    // the same grid, EndEpoch (ShowResults + ResetResults) runs first at every
+    // boundary and the KPM report always reads freshly-reset (all-zero) stats.
+    m_e2RlcStats->SetAttribute("StartTime", TimeValue(MilliSeconds(50)));
     m_radioBearerStatsConnector->EnableE2RlcStats (m_e2RlcStats);
 
     m_e2RlcStatsLte = CreateObject<MmWaveBearerStatsCalculator> ("E2RLCLTE");
     m_e2RlcStatsLte->SetAttribute("DlPdcpOutputFilename", StringValue("DlE2RlcStatsLte.txt"));
     m_e2RlcStatsLte->SetAttribute("UlPdcpOutputFilename", StringValue("UlE2RlcStatsLte.txt"));
     m_e2RlcStatsLte->SetAttribute("EpochDuration", TimeValue(Seconds(0.1)));  // 100ms to match BuildGUICuUp frequency
+    m_e2RlcStatsLte->SetAttribute("StartTime", TimeValue(MilliSeconds(50)));
     m_radioBearerStatsConnector->EnableE2RlcStats (m_e2RlcStatsLte);
   }
   else

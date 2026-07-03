@@ -1115,7 +1115,10 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp (std::string plmId)
       double pdcpLatency = m_e2PdcpStatsCalculator->GetDlDelay (imsi, 3) / 1e5; // unit: x 0.1 ms
       perUserAverageLatencySum += pdcpLatency;
 
-      double pdcpThroughput = txBytes / m_e2Periodicity; // unit kbps
+      // Throughput from the per-report RLC counters (reset each report below),
+      // not from the epoch-reset e2 PDCP calculator whose window is offset from
+      // the report grid.
+      double pdcpThroughput = txPdcpPduBytesNrRlc / m_e2Periodicity; // unit kbps
       double pdcpThroughputRx = rxBytes / m_e2Periodicity; // unit kbps
 
       if (m_drbThrDlPdcpBasedComputationUeid.find (imsi) !=
@@ -1145,7 +1148,9 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp (std::string plmId)
                     << pdcpLatency << " pdcpThroughput " << pdcpThroughput << " rlcBitrate "
                     << rlcBitrate);
 
-      m_e2PdcpStatsCalculator->ResetResultsForImsiLcid (imsi, 3);
+      // Do NOT reset the e2 PDCP calculator here: its own epoch (offset 50 ms
+      // from the report grid) owns the reset. Resetting per report as well
+      // would clip the epoch file windows and the delay averages.
 
       if (!indicationMessageHelper->IsOffline ())
         {
@@ -1153,8 +1158,12 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp (std::string plmId)
                                                     txPdcpPduNrRlc);
         }
 
-      uePmString.insert (std::make_pair (imsi, ",,,," + std::to_string (txPdcpPduBytesNrRlc) + "," +
-                                                   std::to_string (txPdcpPduNrRlc)));
+      // pdcpLatency is in 0.1 ms units; the file reports ms.
+      uePmString.insert (std::make_pair (
+          imsi, std::to_string (txBytes) + "," + std::to_string (txDlPackets) + "," +
+                    std::to_string (pdcpThroughput) + "," + std::to_string (pdcpLatency / 10.0) +
+                    "," + std::to_string (txPdcpPduBytesNrRlc) + "," +
+                    std::to_string (txPdcpPduNrRlc)));
     }
 
   if (!indicationMessageHelper->IsOffline ())
@@ -1229,8 +1238,16 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp (std::string plmId)
 
           auto uePms = uePmString.find (imsi)->second;
 
-          std::string to_print = std::to_string (timestamp) + "," + ueImsiComplete + "," + "," +
-                                 "," + "," + uePms + "\n";
+          // Cell columns: average PDCP latency (ms; the per-UE sum accumulates
+          // 0.1 ms units), UL volume (not tracked, 0), DL tx volume (kbit).
+          double cellAverageLatencyMs =
+              uePmString.empty ()
+                  ? 0.0
+                  : perUserAverageLatencySum / uePmString.size () / 10.0;
+          std::string to_print = std::to_string (timestamp) + "," + ueImsiComplete + "," +
+                                 std::to_string (cellAverageLatencyMs) + "," +
+                                 std::to_string (0.0) + "," +
+                                 std::to_string (cellDlTxVolume) + "," + uePms + "\n";
 
           csv << to_print;
         }
@@ -2735,7 +2752,10 @@ MmWaveEnbNetDevice::BuildGUICuUp (std::string plmId)
       double pdcpLatency = m_e2PdcpStatsCalculator->GetDlDelay (imsi, 3) / 1e5; // unit: x 0.1 ms
       perUserAverageLatencySum += pdcpLatency;
 
-      double pdcpThroughput = txBytes / m_e2Periodicity; // unit kbps
+      // Throughput from the per-report RLC counters (reset each report below),
+      // not from the epoch-reset e2 PDCP calculator whose window is offset from
+      // the report grid.
+      double pdcpThroughput = txPdcpPduBytesNrRlc / m_e2Periodicity; // unit kbps
       double pdcpThroughputRx = rxBytes / m_e2Periodicity; // unit kbps
 
       if (m_drbThrDlPdcpBasedComputationUeid.find (imsi) !=
@@ -2764,10 +2784,16 @@ MmWaveEnbNetDevice::BuildGUICuUp (std::string plmId)
                     << pdcpLatency << " pdcpThroughput " << pdcpThroughput << " rlcBitrate "
                     << rlcBitrate);
 
-      m_e2PdcpStatsCalculator->ResetResultsForImsiLcid (imsi, 3);
+      // Do NOT reset the e2 PDCP calculator here: its own epoch (offset 50 ms
+      // from the report grid) owns the reset. Resetting per report as well
+      // would clip the epoch file windows and the delay averages.
 
-      uePmString.insert (std::make_pair (imsi, ",,,," + std::to_string (txPdcpPduBytesNrRlc) + "," +
-                                                   std::to_string (txPdcpPduNrRlc)));
+      // pdcpLatency is in 0.1 ms units; the file reports ms.
+      uePmString.insert (std::make_pair (
+          imsi, std::to_string (txBytes) + "," + std::to_string (txDlPackets) + "," +
+                    std::to_string (pdcpThroughput) + "," + std::to_string (pdcpLatency / 10.0) +
+                    "," + std::to_string (txPdcpPduBytesNrRlc) + "," +
+                    std::to_string (txPdcpPduNrRlc)));
     }
 
   NS_LOG_DEBUG (Simulator::Now ().GetSeconds ()
@@ -2793,10 +2819,22 @@ MmWaveEnbNetDevice::BuildGUICuUp (std::string plmId)
       uint64_t imsi = ue.second->GetImsi ();
       std::string ueImsiComplete = GetImsiString (imsi);
 
-      auto uePms = uePmString.find (imsi)->second;
+      // UEs skipped by the filter checks above have no PM string; dereferencing
+      // end() here was undefined behavior.
+      auto uePmIt = uePmString.find (imsi);
+      if (uePmIt == uePmString.end ())
+        {
+          continue;
+        }
+      auto uePms = uePmIt->second;
 
-      std::string to_print =
-          std::to_string (timestamp) + "," + ueImsiComplete + "," + "," + "," + "," + uePms + "\n";
+      // Cell columns: average PDCP latency (ms; the per-UE sum accumulates
+      // 0.1 ms units), UL volume (not tracked, 0), DL tx volume (kbit).
+      double cellAverageLatencyMs =
+          uePmString.empty () ? 0.0 : perUserAverageLatencySum / uePmString.size () / 10.0;
+      std::string to_print = std::to_string (timestamp) + "," + ueImsiComplete + "," +
+                             std::to_string (cellAverageLatencyMs) + "," + std::to_string (0.0) +
+                             "," + std::to_string (cellDlTxVolume) + "," + uePms + "\n";
 
       csv << to_print;
     }
